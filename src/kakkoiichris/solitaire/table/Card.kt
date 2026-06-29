@@ -1,15 +1,15 @@
 package kakkoiichris.solitaire.table
 
+import kakkoiichris.hypergame.Game
 import kakkoiichris.hypergame.input.Input
 import kakkoiichris.hypergame.media.Renderable
 import kakkoiichris.hypergame.media.Renderer
-import kakkoiichris.hypergame.state.StateManager
 import kakkoiichris.hypergame.util.Time
 import kakkoiichris.hypergame.util.math.Box
 import kakkoiichris.hypergame.util.math.Vector
 import kakkoiichris.hypergame.util.math.max
 import kakkoiichris.hypergame.view.View
-import kakkoiichris.solitaire.Game
+import kakkoiichris.solitaire.Solitaire
 import java.awt.*
 import java.awt.image.BufferedImage
 
@@ -18,28 +18,14 @@ typealias Cards = MutableList<Card>
 fun cards() =
     mutableListOf<Card>()
 
-class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, height: Double) :
-    Box(x, y, width, height), Renderable {
-    companion object {
-        private const val FLIP_SPEED = 10
-        private const val EASE = 0.25
-
-        val black = Color(0, 0, 0)
-        val red = Color(200, 0, 0)
-
-        fun generateDeck(width: Double, height: Double): Cards {
-            val deck = cards()
-
-            for (suit in Suit.entries) {
-                for (rank in Rank.entries) {
-                    deck += Card(suit, rank, 0.0, 0.0, width, height)
-                }
-            }
-
-            return deck
-        }
-    }
-
+class Card(
+    val suit: Suit,
+    val rank: Rank,
+    x: Double,
+    y: Double,
+    width: Double,
+    height: Double
+) : Box(x, y, width, height), Renderable {
     private var flipping = false
     private var flipDirection = FLIP_SPEED
     private var flipAmount = 0
@@ -57,10 +43,18 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
             field = value
         }
 
-    private val face = BufferedImage(width.toInt(), height.toInt(), BufferedImage.TYPE_INT_ARGB)
-    private val back = BufferedImage(width.toInt(), height.toInt(), BufferedImage.TYPE_INT_ARGB)
+    private val face = createCardImage()
+    private val back = createCardImage()
+
+    private fun createCardImage() =
+        BufferedImage(
+            width.toInt(),
+            height.toInt(),
+            BufferedImage.TYPE_INT_ARGB
+        )
 
     init {
+        // Draw Card Face
         var graphics = face.graphics as Graphics2D
 
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
@@ -92,6 +86,7 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
 
         graphics.dispose()
 
+        // Draw Card Back
         graphics = back.graphics as Graphics2D
 
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
@@ -101,7 +96,7 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
         graphics.color = Color.WHITE
         graphics.fillRoundRect(2, 2, width.toInt() - 4, height.toInt() - 4, 10, 10)
 
-        val cardBack = Game.resources.getFolder("img").getSprite("back")
+        val cardBack = Solitaire.resources.getFolder("img").getSprite("back")
         graphics.composite = AlphaComposite.SrcAtop
         graphics.drawImage(cardBack, 0, 0, width.toInt(), height.toInt(), null)
 
@@ -119,18 +114,18 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
     }
 
     fun flipUp() {
-        if (!faceUp) {
-            flipping = true
-        }
+        if (faceUp) return
+
+        flipping = true
     }
 
     fun flipDown() {
-        if (faceUp) {
-            flipping = true
-        }
+        if (!faceUp) return
+
+        flipping = true
     }
 
-    override fun update(view: View, manager: StateManager, time: Time, input: Input) {
+    override fun update(view: View, game: Game, time: Time, input: Input) {
         if (!pickedUp) {
             highlight = input.mouse in this
         }
@@ -160,7 +155,7 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
         }
     }
 
-    override fun render(view: View, renderer: Renderer) {
+    override fun render(view: View, game: Game, renderer: Renderer) {
         if (pickedUp) {
             renderer.color = Color(0, 0, 0, 100)
 
@@ -204,7 +199,10 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
 
         val isBlack = ordinal % 2 == 0
 
-        val sprite = Game.resources.getFolder("img").getSprite(name.lowercase())
+        val sprite = Solitaire
+            .resources
+            .getFolder("img")
+            .getSprite(name.lowercase())
     }
 
     enum class Rank(val text: String) {
@@ -221,5 +219,25 @@ class Card(val suit: Suit, val rank: Rank, x: Double, y: Double, width: Double, 
         Jack("J"),
         Queen("Q"),
         King("K")
+    }
+
+    companion object {
+        private const val FLIP_SPEED = 10
+        private const val EASE = 0.25
+
+        val black = Color(0, 0, 0)
+        val red = Color(200, 0, 0)
+
+        fun generateDeck(width: Double, height: Double): Cards {
+            val deck = cards()
+
+            for (suit in Suit.entries) {
+                for (rank in Rank.entries) {
+                    deck += Card(suit, rank, 0.0, 0.0, width, height)
+                }
+            }
+
+            return deck
+        }
     }
 }
