@@ -13,18 +13,19 @@ import kakkoiichris.hypergame.view.View
 import kakkoiichris.solitaire.table.*
 import java.awt.Color
 import java.awt.Font
-import kotlin.concurrent.thread
 import kotlin.math.min
 
 object Solitaire : Game {
     private const val HEADER_HEIGHT = 50
-    private const val DEAL_DELAY = 0.2
+    private const val MOVE_DELAY = 0.2
 
     val resources = ResourceManager("/resources")
 
-    private val felt = resources.getFolder("img").getSprite("felt")
+    private val felt = resources
+        .getFolder("img")
+        .getSprite("felt")
 
-    private lateinit var allCards: Cards
+    private val allCards = cards()
 
     private lateinit var foundations: Array<CardSpace.Foundation>
     private lateinit var hand: CardSpace.Hand
@@ -38,15 +39,16 @@ object Solitaire : Game {
     private val particles = particles()
 
     private var timer = 0.0
-
     private var moves = 0
 
-    private var creatingTableau = true
+    private var state = State.DEAL
+
+    private var moveTimer = 0.0
+
     private var dealStart = 0
     private var dealIndex = dealStart
-    private var dealTimer = 0.0
-    private var dealing = true
-    private var flipping = true
+
+    private val cardsToReturn = cards()
 
     override fun init(view: View) {
         val cols = 7
@@ -86,7 +88,7 @@ object Solitaire : Game {
             )
         }
 
-        allCards = Card.generateDeck(cardWidth, cardHeight).apply { shuffle() }
+        allCards += Card.generateDeck(cardWidth, cardHeight).apply { shuffle() }
 
         deck.putAll(allCards)
     }
@@ -95,19 +97,98 @@ object Solitaire : Game {
         foundations.all { it.isFull() }
 
     override fun update(view: View, time: Time, input: Input) {
+        when (state) {
+            State.DEAL  -> updateDeal(view, time, input)
+            State.PLAY  -> updatePlay(view, time, input)
+            State.WIN   -> updateWin(input)
+            State.LOSS  -> Unit//updateLoss(view, time, input)
+            State.RESET -> updateReset(view, time, input)
+        }
+    }
+
+    private fun updateDeal(view: View, time: Time, input: Input) {
         updateCards(view, time, input)
 
-        if (creatingTableau) {
-            updateCreateTableau(time)
+        moveTimer += time.seconds
 
-            return
+        if (moveTimer < MOVE_DELAY) return
+
+        moveTimer -= MOVE_DELAY
+
+        val card = deck.take(false) ?: error("No card to deal?!")
+
+        allCards += card
+        depots[dealIndex].place(card)
+
+        dealIndex++
+
+        if (dealIndex == depots.size) {
+            dealStart++
+
+            dealIndex = dealStart
         }
+
+        if (dealStart != depots.size) return
+
+        depots.forEach { it.flipTopCard() }
+
+        state = State.PLAY
+    }
+
+    private fun updatePlay(view: View, time: Time, input: Input) {
+        timer += time.seconds
+
+        updateCards(view, time, input)
 
         updateInput(view, input)
 
         updateParticles(view, time, input)
 
-        timer += time.seconds
+        if (!isVictory()) return
+
+        state = State.WIN
+    }
+
+    private fun updateWin(input: Input) {
+        if (!input.keyDown(Key.SPACE)) return
+
+        for (depot in depots) {
+            cardsToReturn += depot.cards
+            depot.clear()
+        }
+
+        for (foundation in foundations) {
+            cardsToReturn += foundation.cards
+            foundation.clear()
+        }
+
+        cardsToReturn += hand.cards
+        hand.clear()
+
+        state = State.RESET
+    }
+
+    private fun updateReset(view: View, time: Time, input: Input) {
+        updateCards(view, time, input)
+
+        moveTimer += time.seconds
+
+        if (moveTimer < MOVE_DELAY) return
+
+        moveTimer -= MOVE_DELAY
+
+        val card = cardsToReturn.removeLast()
+
+        card.flipDown()
+
+        allCards += card
+        deck.put(card)
+
+        if (cardsToReturn.isNotEmpty()) return
+
+        deck.shuffle()
+
+        state = State.DEAL
     }
 
     private fun updateCards(view: View, time: Time, input: Input) {
@@ -122,37 +203,13 @@ object Solitaire : Game {
         heldCards.forEach { it.update(view, this, time, input) }
     }
 
-    private fun updateCreateTableau(time: Time) {
-        dealTimer += time.seconds
+    private fun moveCardToFront(card: Card) {
+        allCards -= card
+        allCards += card
+    }
 
-        if (dealTimer < DEAL_DELAY) return
-
-        dealTimer -= DEAL_DELAY
-
-        if (dealing) {
-            val card = deck.take(false)!!
-
-            allCards += card
-            depots[dealIndex].place(card)
-
-            dealIndex++
-
-            if (dealIndex == depots.size) {
-                dealStart++
-
-                dealIndex = dealStart
-            }
-
-            if (dealStart == depots.size) {
-                dealing = false
-            }
-
-            return
-        }
-
-        depots.forEach { it.flipTopCard() }
-
-        creatingTableau = false
+    private fun moveCardsToFront(cards: Cards) {
+        cards.forEach(::moveCardToFront)
     }
 
     private fun updateInput(view: View, input: Input) {
@@ -172,136 +229,151 @@ object Solitaire : Game {
     private fun cardSpaceInput(input: Input) {
         val mousePoint = input.mouse
 
-        if (input.buttonDown(Button.LEFT) && heldCards.isEmpty()) {
-            when {
-                // ACES
-                foundations.any { mousePoint in it }        -> {
-                    foundations.firstOrNull { mousePoint in it }?.let { ace ->
-                        val card = ace.take(true) ?: return
+        when {
+            input.buttonDown(Button.LEFT) && heldCards.isEmpty()    -> takeCards(mousePoint)
 
-                        allCards += card
-                        heldCards += card
+            input.buttonUp(Button.LEFT) && heldCards.isNotEmpty()   -> moveCards(mousePoint)
 
-                        origin = ace
-                    }
-                }
+            input.buttonHeld(Button.LEFT) && heldCards.isNotEmpty() -> placeCards(mousePoint)
 
-                // HAND
-                hand.inAll(mousePoint) && hand.isNotEmpty() -> {
-                    val card = hand.take(true) ?: return
+            input.buttonDown(Button.RIGHT) && heldCards.isEmpty()   -> cheatCards(mousePoint)
+        }
+    }
 
-                    allCards += card
-                    heldCards += card
+    private fun takeCards(mousePoint: Vector) {
+        when {
+            // FOUNDATIONS
+            foundations.any { mousePoint in it }        -> takeFoundation(mousePoint)
 
-                    origin = hand
-                }
+            // HAND
+            hand.inAll(mousePoint) && hand.isNotEmpty() -> takeHand()
 
-                // DECK
-                mousePoint in deck                          -> {
-                    if (deck.isNotEmpty()) {
-                        val limit = min(deck.count, 3)
+            // DECK
+            mousePoint in deck                          -> takeDeck()
 
-                        repeat(limit) { i ->
-                            thread {
-                                Thread.sleep((i * 100).toLong())
+            // STACKS
+            depots.any { it.inAll(mousePoint) }         -> takeDepot(mousePoint)
+        }
+    }
 
-                                val card = deck.take(false) ?: return@thread
+    private fun takeFoundation(mousePoint: Vector) {
+        foundations.firstOrNull { mousePoint in it }?.let { ace ->
+            val card = ace.take(true) ?: return
 
-                                card.flipUp()
+            moveCardToFront(card)
+            heldCards += card
 
-                                allCards += card
-                                hand.place(card)
-                            }
-                        }
+            origin = ace
+        }
+    }
 
-                        moves++
-                    }
-                    else {
-                        for (i in hand.indices.reversed()) {
-                            val card = hand.removeAt(i)
+    private fun takeHand() {
+        val card = hand.take(true) ?: return
 
-                            card.flipDown()
+        moveCardToFront(card)
+        heldCards += card
 
-                            allCards += card
-                            deck.place(card)
-                        }
-                    }
+        origin = hand
+    }
 
-                    origin = deck
-                }
+    private fun takeDeck() {
+        if (deck.isNotEmpty()) {
+            val limit = min(deck.count, 3)
 
-                // STACKS
-                depots.any { it.inAll(mousePoint) }         -> {
-                    depots.firstOrNull { it.inAll(mousePoint) }?.let { stack ->
-                        heldCards.addAll(stack.take(mousePoint))
+            repeat(limit) { i ->
+                val card = deck.take(false) ?: TODO()
 
-                        origin = stack
-                    }
-                }
+                card.flipUp()
+
+                moveCardToFront(card)
+                hand.place(card)
+            }
+
+            moves++
+        }
+        else {
+            for (i in hand.indices.reversed()) {
+                val card = hand.removeAt(i)
+
+                card.flipDown()
+
+                moveCardToFront(card)
+                deck.place(card)
             }
         }
 
-        if (input.buttonUp(Button.LEFT) && heldCards.isNotEmpty()) {
-            for (ace in foundations) {
-                if (mousePoint !in ace || heldCards.size != 1 || !ace.accepts(heldCards[0])) {
-                    continue
-                }
+        origin = deck
+    }
 
-                ace.place(heldCards.removeAt(0))
+    private fun takeDepot(mousePoint: Vector) {
+        depots.firstOrNull { it.inAll(mousePoint) }?.let { stack ->
+            val cards = stack.take(mousePoint)
 
-                heldCards.clear()
+            moveCardsToFront(cards)
+            heldCards.addAll(cards)
 
-                if (origin is CardSpace.Depot) {
-                    origin.let { it!!.flipTopCard() }
-                }
-
-                moves++
-
-                spawnParticles(ace)
-
-                return
-            }
-
-            for (stack in depots) {
-                if (!stack.inAll(mousePoint) || !stack.accepts(heldCards[0])) {
-                    continue
-                }
-
-                stack.placeAll(heldCards)
-
-                heldCards.clear()
-
-                if (origin is CardSpace.Depot) {
-                    origin.let { it!!.flipTopCard() }
-                }
-
-                moves++
-
-                return
-            }
-
-            if (!(origin == null || origin is CardSpace.Deck)) {
-                origin.let { it!!.placeAll(heldCards) }
-
-                heldCards.clear()
-            }
-
-            origin = null
+            origin = stack
         }
+    }
 
-        if (input.buttonHeld(Button.LEFT) && heldCards.isNotEmpty()) {
-            for (i in heldCards.indices) {
-                heldCards[i].target = mousePoint - Vector(
-                    heldCards[0].width / 2,
-                    heldCards[0].height / 2
-                ) + Vector(y = i * CardSpace.Depot.MAX_OFFSET)
+    private fun moveCards(mousePoint: Vector) {
+        for (ace in foundations) {
+            if (mousePoint !in ace || heldCards.size != 1 || !ace.accepts(heldCards[0])) {
+                continue
             }
-        }
 
-        if (!input.buttonDown(Button.RIGHT) || !heldCards.isEmpty()) {
+            ace.place(heldCards.removeAt(0))
+
+            heldCards.clear()
+
+            if (origin is CardSpace.Depot) {
+                origin.let { it!!.flipTopCard() }
+            }
+
+            moves++
+
+            spawnParticles(ace)
+
             return
         }
 
+        for (stack in depots) {
+            if (!stack.inAll(mousePoint) || !stack.accepts(heldCards[0])) {
+                continue
+            }
+
+            stack.placeAll(heldCards)
+
+            heldCards.clear()
+
+            if (origin is CardSpace.Depot) {
+                origin.let { it!!.flipTopCard() }
+            }
+
+            moves++
+
+            return
+        }
+
+        if (!(origin == null || origin is CardSpace.Deck)) {
+            origin.let { it!!.placeAll(heldCards) }
+
+            heldCards.clear()
+        }
+
+        origin = null
+    }
+
+    private fun placeCards(mousePoint: Vector) {
+        for (i in heldCards.indices) {
+            heldCards[i].target = mousePoint - Vector(
+                heldCards[0].width / 2,
+                heldCards[0].height / 2
+            ) + Vector(y = i * CardSpace.Depot.MAX_OFFSET)
+        }
+    }
+
+    private fun cheatCards(mousePoint: Vector) {
         when {
             // ACES
             foundations.any { mousePoint in it }        -> {
@@ -440,7 +512,7 @@ object Solitaire : Game {
 
         particles.forEach { it.render(view, this, renderer) }
 
-        if (isVictory()) {
+        if (state == State.WIN) {
             renderer.color = Color(0, 0, 0, 200)
             renderer.fillRect(0, 0, view.width, view.height)
             renderer.color = Color.WHITE

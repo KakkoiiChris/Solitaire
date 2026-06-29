@@ -10,3 +10,5 @@ fun main() {
 
     display.open(Solitaire)
 }
+
+class X(val a:Int)

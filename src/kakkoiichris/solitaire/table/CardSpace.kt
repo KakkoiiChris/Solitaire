@@ -82,14 +82,14 @@ sealed class CardSpace(
         cards.forEach(this::place)
     }
 
-    fun take(up: Boolean): Card? {
+    fun take(faceUp: Boolean): Card? {
         if (cards.isEmpty()) {
             return null
         }
 
         val card = cards.removeAt(cards.lastIndex)
 
-        if (up) {
+        if (faceUp) {
             card.pickedUp = true
         }
 
@@ -150,6 +150,9 @@ sealed class CardSpace(
 
     fun last() =
         cards.last()
+
+    fun clear() =
+        cards.clear()
 
     override fun update(view: View, game: Game, time: Time, input: Input) {
         highlight = input.mouse in this
