@@ -17,7 +17,7 @@ import kotlin.math.min
 
 object Solitaire : Game {
     private const val HEADER_HEIGHT = 50
-    private const val MOVE_DELAY = 0.2
+    private const val MOVE_DELAY = 0.1
 
     val resources = ResourceManager("/resources")
 
@@ -38,7 +38,7 @@ object Solitaire : Game {
 
     private val particles = particles()
 
-    private var timer = 0.0
+    private var gameTime = 0.0
     private var moves = 0
 
     private var state = State.DEAL
@@ -100,8 +100,8 @@ object Solitaire : Game {
         when (state) {
             State.DEAL  -> updateDeal(view, time, input)
             State.PLAY  -> updatePlay(view, time, input)
-            State.WIN   -> updateWin(input)
-            State.LOSS  -> Unit//updateLoss(view, time, input)
+            State.WIN   -> updateWin(view, time, input)
+            State.LOSS  -> updateLoss(view, time, input)
             State.RESET -> updateReset(view, time, input)
         }
     }
@@ -136,7 +136,7 @@ object Solitaire : Game {
     }
 
     private fun updatePlay(view: View, time: Time, input: Input) {
-        timer += time.seconds
+        gameTime += time.seconds
 
         updateCards(view, time, input)
 
@@ -149,7 +149,26 @@ object Solitaire : Game {
         state = State.WIN
     }
 
-    private fun updateWin(input: Input) {
+    private fun updateWin(view: View, time: Time, input: Input) {
+        updateCards(view, time, input)
+
+        updateParticles(view, time, input)
+
+        if (!input.keyDown(Key.SPACE)) return
+
+        for (foundation in foundations) {
+            cardsToReturn += foundation.cards
+            foundation.clear()
+        }
+
+        state = State.RESET
+    }
+
+    private fun updateLoss(view: View, time: Time, input: Input) {
+        updateCards(view, time, input)
+
+        updateParticles(view, time, input)
+
         if (!input.keyDown(Key.SPACE)) return
 
         for (depot in depots) {
@@ -181,12 +200,17 @@ object Solitaire : Game {
 
         card.flipDown()
 
-        allCards += card
-        deck.put(card)
+        moveCardToFront(card)
+        deck.place(card)
 
         if (cardsToReturn.isNotEmpty()) return
 
+        gameTime = 0.0
+
         deck.shuffle()
+
+        dealStart = 0
+        dealIndex = dealStart
 
         state = State.DEAL
     }
@@ -220,7 +244,7 @@ object Solitaire : Game {
         }
 
         if (input.keyDown(Key.R)) {
-            deck.shuffle()
+            state = State.LOSS
         }
 
         cardSpaceInput(input)
@@ -379,10 +403,13 @@ object Solitaire : Game {
             foundations.any { mousePoint in it }        -> {
                 foundations.firstOrNull { mousePoint in it }?.let { ace ->
                     if (ace.isNotEmpty()) {
-                        val card = ace.last()
 
-                        depots.firstOrNull { s -> s.accepts(card) }?.let { stack ->
-                            stack.place(ace.take(true))
+
+                        depots.firstOrNull { s -> s.accepts(ace.last()) }?.let { stack ->
+                            val card = ace.take(true) ?: TODO()
+
+                            moveCardToFront(card)
+                            stack.place(card)
 
                             moves++
                         }
@@ -392,18 +419,22 @@ object Solitaire : Game {
 
             // HAND
             hand.inAll(mousePoint) && hand.isNotEmpty() -> {
-                val card = hand.last()
-
-                foundations.firstOrNull { s -> s.accepts(card) }
+                foundations.firstOrNull { s -> s.accepts(hand.last()) }
                     ?.let { ace ->
-                        ace.place(hand.take(true))
+                        val card = hand.take(true) ?: TODO()
+
+                        moveCardToFront(card)
+                        ace.place(card)
 
                         spawnParticles(ace)
 
                         moves++
                     }
-                    ?: depots.firstOrNull { s -> s.accepts(card) }?.let { stack ->
-                        stack.place(hand.take(true))
+                    ?: depots.firstOrNull { s -> s.accepts(hand.last()) }?.let { stack ->
+                        val card = hand.take(true) ?: TODO()
+
+                        moveCardToFront(card)
+                        stack.place(card)
 
                         moves++
                     }
@@ -416,6 +447,7 @@ object Solitaire : Game {
 
                     card.flipUp()
 
+                    moveCardToFront(card)
                     hand.place(card)
 
                     moves++
@@ -433,19 +465,20 @@ object Solitaire : Game {
 
             // STACKS
             depots.any { it.inAll(mousePoint) }         -> {
-                depots.firstOrNull { it.inAll(mousePoint) }?.let { stack ->
-                    val cards = stack.take(mousePoint)
+                depots.firstOrNull { it.inAll(mousePoint) }?.let { depot ->
+                    val cards = depot.take(mousePoint)
 
                     if (cards.isEmpty()) return@let
 
                     if (cards.size == 1) {
-                        val card = cards.first()
-
-                        foundations.firstOrNull { s -> s.accepts(card) }
+                        foundations.firstOrNull { s -> s.accepts(cards.first()) }
                             ?.let { foundation ->
+                                val card = cards.first()
+
+                                moveCardToFront(card)
                                 foundation.place(card)
 
-                                stack.flipTopCard()
+                                depot.flipTopCard()
 
                                 spawnParticles(foundation)
 
@@ -456,16 +489,17 @@ object Solitaire : Game {
                     }
 
                     depots
-                        .filter { it !== stack }
+                        .filter { it !== depot }
                         .firstOrNull { it.accepts(cards.first()) }
                         ?.let { target ->
+                            moveCardsToFront(cards)
                             target.placeAll(cards)
 
-                            stack.flipTopCard()
+                            depot.flipTopCard()
 
                             moves++
                         }
-                        ?: stack.placeAll(cards)
+                        ?: depot.placeAll(cards)
                 }
             }
         }
@@ -493,7 +527,7 @@ object Solitaire : Game {
         renderer.color = Color.WHITE
         renderer.drawString("Moves: $moves", headerBox, xAlign = 0.1)
         renderer.drawString(
-            "Time: %02d:%02d".format(timer.toInt() / 60, timer.toInt() % 60),
+            "Time: %02d:%02d".format(gameTime.toInt() / 60, gameTime.toInt() % 60),
             headerBox,
             xAlign = 0.9
         )
@@ -517,7 +551,14 @@ object Solitaire : Game {
             renderer.fillRect(0, 0, view.width, view.height)
             renderer.color = Color.WHITE
             renderer.font = Font("Monospaced", Font.BOLD, 100)
-            renderer.drawString("YOU WIN!!!!!", view.bounds)
+            renderer.drawString("You win!", view.bounds)
+        }
+        else if (state == State.LOSS) {
+            renderer.color = Color(0, 0, 0, 200)
+            renderer.fillRect(0, 0, view.width, view.height)
+            renderer.color = Color.WHITE
+            renderer.font = Font("Monospaced", Font.BOLD, 100)
+            renderer.drawString("You lose...", view.bounds)
         }
     }
 
