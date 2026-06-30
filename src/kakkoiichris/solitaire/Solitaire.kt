@@ -205,6 +205,7 @@ object Solitaire : Game {
 
         if (cardsToReturn.isNotEmpty()) return
 
+        moves = 0
         gameTime = 0.0
 
         deck.shuffle()
